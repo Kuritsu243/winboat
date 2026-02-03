@@ -5,7 +5,12 @@
             <div class="flex flex-row gap-5 mt-4 w-[35vw]">
                 <div class="flex flex-col flex-none gap-2 justify-center items-center">
                     <div class="relative">
-                        <img alt="Icon for current app" v-if="currentAppForm.Icon" :src="currentAppForm.Icon" class="size-24" />
+                        <img
+                            alt="Icon for current app"
+                            v-if="currentAppForm.Icon"
+                            :src="currentAppForm.Icon"
+                            class="size-24"
+                        />
                         <Icon v-else class="size-24 text-neutral-400" icon="mdi:image"></Icon>
                         <button
                             @click="pickCustomAppIcon"
@@ -96,7 +101,7 @@
             class="flex justify-between items-center mb-6"
             :class="{
                 'opacity-50 pointer-events-none':
-                    winboat.containerStatus.value !== ContainerStatus.Running || !winboat.isOnline.value,
+                    winboat.containerStatus.value !== ContainerStatus.RUNNING || !winboat.isOnline.value,
             }"
         >
             <x-label class="text-neutral-300">Apps</x-label>
@@ -112,16 +117,24 @@
                     <x-icon href="#add" class="qualifier"></x-icon>
                     <x-label class="qualifier">Add Custom</x-label>
                 </x-button>
-                <x-select @change="(e: any) => (sortBy = e.detail.newValue)" :disabled="!winboat.isOnline.value">
+                <x-select
+                    @change="
+                        (e: any) => {
+                            sortBy = e.detail.newValue;
+                            WinboatConfig.getInstance().config.appsSortOrder = e.detail.newValue;
+                        }
+                    "
+                    :disabled="!winboat.isOnline.value"
+                >
                     <x-menu class="">
-                        <x-menuitem value="name" toggled>
+                        <x-menuitem value="name" :toggled="sortBy === 'name'">
                             <x-icon href="#sort" class="qualifier"></x-icon>
                             <x-label>
                                 <span class="qualifier"> Sort By: </span>
-                                Name</x-label
-                            >
+                                Name
+                            </x-label>
                         </x-menuitem>
-                        <x-menuitem value="usage">
+                        <x-menuitem value="usage" :toggled="sortBy === 'usage'">
                             <x-icon href="#sort" class="qualifier"></x-icon>
                             <x-label>
                                 <span class="qualifier"> Sort By: </span>
@@ -220,8 +233,8 @@
                 <h1 class="text-xl font-semibold w-[30vw] text-center leading-16">
                     <span
                         v-if="
-                            winboat.containerStatus.value === ContainerStatus.Exited ||
-                            winboat.containerStatus.value === ContainerStatus.Dead
+                            winboat.containerStatus.value === ContainerStatus.EXITED ||
+                            winboat.containerStatus.value === ContainerStatus.UNKNOWN
                         "
                     >
                         The WinBoat Container is not running, please start it to view your apps list.
@@ -239,14 +252,15 @@
 <script setup lang="ts">
 import { Icon } from "@iconify/vue";
 import { computed, onMounted, ref, useTemplateRef, watch, nextTick } from "vue";
-import { ContainerStatus, Winboat } from "../lib/winboat";
+import { Winboat } from "../lib/winboat";
+import { ContainerStatus } from "../lib/containers/common";
 import { type WinApp } from "../../types";
 import WBContextMenu from "../components/WBContextMenu.vue";
 import WBMenuItem from "../components/WBMenuItem.vue";
 import { AppIcons, DEFAULT_ICON } from "../data/appicons";
-import { GUEST_API_PORT } from "../lib/constants";
 import { debounce } from "../utils/debounce";
 import { Jimp, JimpMime } from "jimp";
+import { WinboatConfig } from "../lib/config";
 const nodeFetch: typeof import("node-fetch").default = require("node-fetch");
 const FormData: typeof import("form-data") = require("form-data");
 
@@ -269,12 +283,6 @@ const currentAppForm = ref<WinApp>({
     Source: "",
 });
 
-const apiURL = computed(() => {
-    const port = winboat.portMgr.value?.getHostPort(GUEST_API_PORT) ?? GUEST_API_PORT;
-
-    return `http://127.0.0.1:${port}`;
-});
-
 const AllSources = computed(() => {
     let sourceList: Record<string, string> = {};
     const sourceMap: Record<string, string> = {
@@ -284,9 +292,11 @@ const AllSources = computed(() => {
         uwp: "Microsoft Store",
         internal: "Internal",
     };
-    apps.value.forEach(app => {
+
+    for (const app of apps.value) {
         sourceList[app.Source] = sourceMap[app.Source] || app.Source;
-    });
+    }
+
     return sourceList;
 });
 
@@ -312,6 +322,8 @@ const computedApps = computed(() => {
 });
 
 onMounted(async () => {
+    sortBy.value = WinboatConfig.getInstance().config.appsSortOrder;
+
     await refreshApps();
 
     watch(winboat.isOnline, async (newVal, _) => {
@@ -333,13 +345,13 @@ onMounted(async () => {
 
 async function refreshApps() {
     if (winboat.isOnline.value) {
-        const loadedApps = await winboat.appMgr!.getApps(apiURL.value);
+        const loadedApps = await winboat.appMgr!.getApps(winboat.apiUrl!);
         apps.value = loadedApps.map(app => ({
             ...app,
             id: crypto.randomUUID(),
         }));
         // Run in background, won't impact UX
-        await winboat.appMgr!.updateAppCache(apiURL.value);
+        await winboat.appMgr!.updateAppCache(winboat.apiUrl!);
     }
 }
 
@@ -347,7 +359,7 @@ const debouncedFetchIcon = debounce(async (newVal: string, oldVal: string) => {
     if (newVal !== oldVal && newVal !== "") {
         const formData = new FormData();
         formData.append("path", newVal);
-        const iconRes = await nodeFetch(`${apiURL.value}/get-icon`, {
+        const iconRes = await nodeFetch(`${winboat.apiUrl!}/get-icon`, {
             method: "POST",
             body: formData as any,
         });
